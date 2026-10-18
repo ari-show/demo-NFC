@@ -8,4 +8,4 @@ def test_help_exits_cleanly(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         main.main()
     assert exc.value.code == 0
-    assert "--max-blocks" in capsys.readouterr().out
+    assert "--reveal" in capsys.readouterr().out
