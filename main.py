@@ -7,7 +7,6 @@ import time
 import nfc
 from nfc.tag.tt3 import BlockCode, ServiceCode
 
-
 # Service attributes that permit Read Without Encryption.
 UNPROTECTED_ATTRIBUTES = {0x09, 0x0B, 0x0D, 0x0F, 0x11, 0x13, 0x15, 0x17}
 MAX_SERVICE_ENTRIES = 256
@@ -29,7 +28,9 @@ def read_service(tag, service, max_blocks, deadline):
         try:
             raw = bytes(tag.read_without_encryption([service], [BlockCode(block)]))
         except nfc.tag.TagCommandError as exc:
-            print(f"    ブロック{block}で読み取り終了（範囲外・拒否・通信エラー等）: {safe(exc)}")
+            print(
+                f"    ブロック{block}で読み取り終了（範囲外・拒否・通信エラー等）: {safe(exc)}"
+            )
             break
         data.extend(raw)
         ascii_text = "".join(chr(b) if 32 <= b < 127 else "." for b in raw)
@@ -38,7 +39,9 @@ def read_service(tag, service, max_blocks, deadline):
         print(f"    最大{max_blocks}ブロックまで表示しました。後続は未確認です。")
 
     for match in re.finditer(rb"[\x20-\x7e]{4,}", data):
-        print(f"    ASCII候補（バイト位置{match.start()}）: {match.group().decode('ascii')!r}")
+        print(
+            f"    ASCII候補（バイト位置{match.start()}）: {match.group().decode('ascii')!r}"
+        )
     return bytes(data)
 
 
@@ -76,11 +79,15 @@ def inspect_felica(tag, max_blocks):
                 service = ServiceCode(code >> 6, code & 0x3F)
                 print(f"  {safe(service)}")
                 if service.attribute not in UNPROTECTED_ATTRIBUTES:
-                    print("    認証が必要、または未対応の属性のため読み取り対象外です。")
+                    print(
+                        "    認証が必要、または未対応の属性のため読み取り対象外です。"
+                    )
                     continue
                 read_service(tag, service, max_blocks, deadline)
             else:
-                print(f"  エリア・サービスの探索上限{MAX_SERVICE_ENTRIES}件に達しました。")
+                print(
+                    f"  エリア・サービスの探索上限{MAX_SERVICE_ENTRIES}件に達しました。"
+                )
         except nfc.tag.TagCommandError as exc:
             print(f"  このシステムの調査を中断しました: {safe(exc)}")
 
@@ -105,9 +112,14 @@ def inspect_card(tag, max_blocks):
     except (nfc.tag.TagCommandError, ValueError) as exc:
         print(f"NDEFの読み取り・解析に失敗しました: {safe(exc)}")
 
-    if all(callable(getattr(tag, name, None)) for name in (
-        "request_system_code", "search_service_code", "read_without_encryption"
-    )):
+    if all(
+        callable(getattr(tag, name, None))
+        for name in (
+            "request_system_code",
+            "search_service_code",
+            "read_without_encryption",
+        )
+    ):
         inspect_felica(tag, max_blocks)
     elif tag.type == "Type3Tag":
         print("このカードではFeliCaのシステム・サービス探索を利用できません。")
@@ -123,11 +135,19 @@ def positive_int(value):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NFCカードを1枚、読み取り専用で調査します。")
+    parser = argparse.ArgumentParser(
+        description="NFCカードを1枚、読み取り専用で調査します。"
+    )
     parser.add_argument("--device", default="usb:054c:06c1", help="nfcpyのデバイス指定")
-    parser.add_argument("--timeout", type=positive_int, default=180, help="カード待機秒数（既定: 180）")
-    parser.add_argument("--max-blocks", type=positive_int, default=32,
-                        help="1サービスの最大読み取りブロック数（既定: 32）")
+    parser.add_argument(
+        "--timeout", type=positive_int, default=180, help="カード待機秒数（既定: 180）"
+    )
+    parser.add_argument(
+        "--max-blocks",
+        type=positive_int,
+        default=32,
+        help="1サービスの最大読み取りブロック数（既定: 32）",
+    )
     args = parser.parse_args()
     if args.max_blocks > 65536:
         parser.error("--max-blocksは65536以下を指定してください。")
@@ -135,7 +155,10 @@ def main():
     try:
         with nfc.ContactlessFrontend(args.device) as reader:
             print("リーダー:", safe(reader), flush=True)
-            print(f"カードをかざしてください（最大{args.timeout}秒待機、Ctrl+Cで終了）。", flush=True)
+            print(
+                f"カードをかざしてください（最大{args.timeout}秒待機、Ctrl+Cで終了）。",
+                flush=True,
+            )
             deadline = time.monotonic() + args.timeout
             tag = reader.connect(
                 rdwr={"on-connect": lambda card: inspect_card(card, args.max_blocks)},
@@ -149,11 +172,12 @@ def main():
         return 130
     except (OSError, nfc.tag.TagCommandError) as exc:
         print(f"読み取りエラー: {safe(exc)}")
-        print("USB接続、libusbの導入、USBアクセス権限、他アプリの使用状況を確認してください。")
+        print(
+            "USB接続、libusbの導入、USBアクセス権限、他アプリの使用状況を確認してください。"
+        )
         return 1
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -32,14 +32,14 @@ jobs:
           # PR 経由のキャッシュ汚染を避けるため、キャッシュは使わない
           enable-cache: false
 
-      - name: Install dependencies (dev only, lockfile as-is)
-        run: uv sync --frozen --only-dev
+      - name: Install dependencies (lockfile as-is)
+        run: uv sync --frozen
 
       - name: Ruff lint
-        run: uv run --frozen --only-dev ruff check .
+        run: uv run --frozen ruff check .
 
       - name: Ruff format
-        run: uv run --frozen --only-dev ruff format --check .
+        run: uv run --frozen ruff format --check .
 
       - name: Pytest
-        run: uv run --frozen --only-dev pytest
+        run: uv run --frozen pytest
