@@ -1,4 +1,7 @@
-"""Read one NFC card without writing or attempting authentication."""
+"""Read one NFC card without writing or attempting authentication.
+
+Identifiers, service codes and card contents are masked unless --reveal is given.
+"""
 
 import argparse
 import re
@@ -18,8 +21,23 @@ def safe(value):
     return "".join(ch if ch.isprintable() else "." for ch in str(value))
 
 
-def read_service(tag, service, max_blocks, deadline):
-    """Join bounded blocks before extracting strings across block boundaries."""
+def mask(data, reveal, keep=0):
+    """Hide an identifier unless reveal is set; keep leading bytes that are not unique."""
+    text = data.hex().upper()
+    if reveal:
+        return text
+    return text[: keep * 2] + "*" * (len(text) - keep * 2) + f"  ({len(data)}バイト)"
+
+
+def ascii_candidates(data):
+    return list(re.finditer(rb"[\x20-\x7e]{4,}", data))
+
+
+def read_service(tag, service, max_blocks, deadline, reveal=False):
+    """Join bounded blocks before extracting strings across block boundaries.
+
+    Block contents are printed only when reveal is set.
+    """
     data = bytearray()
     for block in range(max_blocks):
         if time.monotonic() >= deadline:
@@ -28,25 +46,33 @@ def read_service(tag, service, max_blocks, deadline):
         try:
             raw = bytes(tag.read_without_encryption([service], [BlockCode(block)]))
         except nfc.tag.TagCommandError as exc:
-            print(
-                f"    ブロック{block}で読み取り終了（範囲外・拒否・通信エラー等）: {safe(exc)}"
-            )
+            if reveal:
+                print(
+                    f"    ブロック{block}で読み取り終了"
+                    f"（範囲外・拒否・通信エラー等）: {safe(exc)}"
+                )
             break
         data.extend(raw)
-        ascii_text = "".join(chr(b) if 32 <= b < 127 else "." for b in raw)
-        print(f"    [{block:04d}] {raw.hex(' ').upper()} | {ascii_text}")
+        if reveal:
+            ascii_text = "".join(chr(b) if 32 <= b < 127 else "." for b in raw)
+            print(f"    [{block:04d}] {raw.hex(' ').upper()} | {ascii_text}")
     else:
-        print(f"    最大{max_blocks}ブロックまで表示しました。後続は未確認です。")
+        print(f"    最大{max_blocks}ブロックまで読みました。後続は未確認です。")
 
-    for match in re.finditer(rb"[\x20-\x7e]{4,}", data):
-        print(
-            f"    ASCII候補（バイト位置{match.start()}）: {match.group().decode('ascii')!r}"
-        )
+    if reveal:
+        for match in ascii_candidates(data):
+            print(
+                f"    ASCII候補（バイト位置{match.start()}）: "
+                f"{match.group().decode('ascii')!r}"
+            )
     return bytes(data)
 
 
-def inspect_felica(tag, max_blocks):
-    """Enumerate systems/services and read only services that need no key."""
+def inspect_felica(tag, max_blocks, reveal=False):
+    """Enumerate systems/services and read only services that need no key.
+
+    Without reveal, only aggregate counts are printed (no codes, no contents).
+    """
     deadline = time.monotonic() + INSPECTION_SECONDS
     try:
         systems = tag.request_system_code()
@@ -54,12 +80,15 @@ def inspect_felica(tag, max_blocks):
         print(f"システム一覧を取得できませんでした: {safe(exc)}")
         return
 
-    print("システムコード:", ", ".join(f"{code:04X}" for code in systems))
+    stats = {"areas": 0, "services": 0, "readable": 0, "blocks": 0, "strings": 0}
+    if reveal:
+        print("システムコード:", ", ".join(f"{code:04X}" for code in systems))
     for system in systems:
         if time.monotonic() >= deadline:
             print("FeliCa調査の時間上限に達しました。残りは未確認です。")
-            return
-        print(f"\nシステム {system:04X}")
+            break
+        if reveal:
+            print(f"\nシステム {system:04X}")
         try:
             # nfcpy's dump implementation also selects each logical system
             # and updates its potentially distinct IDm and PMm this way.
@@ -68,22 +97,30 @@ def inspect_felica(tag, max_blocks):
             for index in range(MAX_SERVICE_ENTRIES):
                 if time.monotonic() >= deadline:
                     print("FeliCa調査の時間上限に達しました。残りは未確認です。")
-                    return
+                    break
                 entry = tag.search_service_code(index)
                 if entry is None:
                     break
                 if len(entry) == 2:
-                    print(f"  エリア {entry[0]:04X}〜{entry[1]:04X}")
+                    stats["areas"] += 1
+                    if reveal:
+                        print(f"  エリア {entry[0]:04X}〜{entry[1]:04X}")
                     continue
                 code = entry[0]
                 service = ServiceCode(code >> 6, code & 0x3F)
-                print(f"  {safe(service)}")
+                stats["services"] += 1
+                if reveal:
+                    print(f"  {safe(service)}")
                 if service.attribute not in UNPROTECTED_ATTRIBUTES:
-                    print(
-                        "    認証が必要、または未対応の属性のため読み取り対象外です。"
-                    )
+                    if reveal:
+                        print(
+                            "    認証が必要、または未対応の属性のため読み取り対象外です。"
+                        )
                     continue
-                read_service(tag, service, max_blocks, deadline)
+                stats["readable"] += 1
+                data = read_service(tag, service, max_blocks, deadline, reveal)
+                stats["blocks"] += len(data) // 16
+                stats["strings"] += len(ascii_candidates(data))
             else:
                 print(
                     f"  エリア・サービスの探索上限{MAX_SERVICE_ENTRIES}件に達しました。"
@@ -91,15 +128,27 @@ def inspect_felica(tag, max_blocks):
         except nfc.tag.TagCommandError as exc:
             print(f"  このシステムの調査を中断しました: {safe(exc)}")
 
+    if not reveal:
+        print(f"システム数: {len(systems)}（コードは非表示）")
+        print(f"エリア数: {stats['areas']}、サービス数: {stats['services']}")
+        print(f"認証不要のサービス数: {stats['readable']}")
+        print(f"読み取れたブロック数: {stats['blocks']}")
+        print(f"ASCII文字列候補: {stats['strings']}件（内容は非表示）")
 
-def inspect_card(tag, max_blocks):
+
+def inspect_card(tag, max_blocks, reveal=False):
     print("\nカードを検出しました。読み取り終了まで動かさないでください。", flush=True)
     print("カード種類:", safe(tag.type))
-    print("詳細:", safe(tag))
+    if reveal:
+        print("詳細:", safe(tag))
+    elif getattr(tag, "product", None):
+        print("製品名:", safe(tag.product))
     label = "IDm" if tag.type == "Type3Tag" else "UID"
-    print(f"{label}:", tag.identifier.hex().upper())
+    # The first two IDm bytes are a manufacturer code and do not identify a card.
+    keep = 2 if tag.type == "Type3Tag" else 0
+    print(f"{label}:", mask(tag.identifier, reveal, keep))
     if hasattr(tag, "pmm"):
-        print("PMm:", tag.pmm.hex().upper())
+        print("PMm:", mask(tag.pmm, reveal))
 
     try:
         ndef = tag.ndef
@@ -108,7 +157,10 @@ def inspect_card(tag, max_blocks):
         else:
             print(f"NDEF: {ndef.length}バイト")
             for index, record in enumerate(ndef.records, 1):
-                print(f"  レコード{index}: {safe(record)}")
+                shown = (
+                    safe(record) if reveal else f"{safe(record.type)}（内容は非表示）"
+                )
+                print(f"  レコード{index}: {shown}")
     except (nfc.tag.TagCommandError, ValueError) as exc:
         print(f"NDEFの読み取り・解析に失敗しました: {safe(exc)}")
 
@@ -120,7 +172,7 @@ def inspect_card(tag, max_blocks):
             "read_without_encryption",
         )
     ):
-        inspect_felica(tag, max_blocks)
+        inspect_felica(tag, max_blocks, reveal)
     elif tag.type == "Type3Tag":
         print("このカードではFeliCaのシステム・サービス探索を利用できません。")
     print("\n読み取り処理を終了しました。書き込みは行っていません。", flush=True)
@@ -148,6 +200,11 @@ def main():
         default=32,
         help="1サービスの最大読み取りブロック数（既定: 32）",
     )
+    parser.add_argument(
+        "--reveal",
+        action="store_true",
+        help="ID・コード・カード内のデータを伏せずに表示する（自分のカードの確認用）",
+    )
     args = parser.parse_args()
     if args.max_blocks > 65536:
         parser.error("--max-blocksは65536以下を指定してください。")
@@ -161,7 +218,11 @@ def main():
             )
             deadline = time.monotonic() + args.timeout
             tag = reader.connect(
-                rdwr={"on-connect": lambda card: inspect_card(card, args.max_blocks)},
+                rdwr={
+                    "on-connect": lambda card: inspect_card(
+                        card, args.max_blocks, args.reveal
+                    )
+                },
                 terminate=lambda: time.monotonic() >= deadline,
             )
             if not tag:
