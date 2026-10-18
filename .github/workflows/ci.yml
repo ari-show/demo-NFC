@@ -1,28 +1,36 @@
 name: CI
 
+# pull_request_target / workflow_run は使わない。
+# fork からの PR は secrets 無し・読み取り専用トークンで実行される。
 on:
   push:
     branches: [main]
   pull_request:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+# ワークフロー全体の GITHUB_TOKEN 権限を最小化
+permissions: {}
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      # uv itself is a single binary; Python is fetched by uv from .python-version
-      - uses: astral-sh/setup-uv@v6
+      # 外部 action は全て commit SHA 固定(タグは付け替え可能なため)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          enable-cache: true
+          # GITHUB_TOKEN を .git/config に残さない
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          # PR 経由のキャッシュ汚染を避けるため、キャッシュは使わない
+          enable-cache: false
 
       - name: Install dependencies (dev only, lockfile as-is)
         run: uv sync --frozen --only-dev
